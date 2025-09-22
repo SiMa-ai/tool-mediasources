@@ -1,0 +1,29 @@
+{
+    "name": "multi-channel-video-sources",
+    "version": "0.0.1",
+    "release": "stable",
+    "description": "Streaming multiple video sources on any host",
+    "platforms": [
+        {
+            "type": "host",
+            "os": [
+                "mac",
+                "linux",
+                "windows"
+            ]
+        }
+    ],
+    "resources": [
+        "https://docs.sima.ai/assets/multi-video-sources/videos-480p30.tar.gz",
+        "https://docs.sima.ai/assets/multi-video-sources/videos-720p16.tar.gz",
+        "gh:paconsultings/tool-mediasources"
+    ],
+    "size": {
+        "download": "10MB",
+        "install": "122MB"
+    },
+    "installation": {
+        "script": "echo",
+        "post-message": "[bold]To run this package:[/bold]\n\n1. [green]cd tool-mediasources  [/green]\n2. [green]./mediasrc.sh ../videos-480p30[/green] (on macOS and Linux)\n3. [green]mediasrc.bat ..\\videos-480p30[/green] (on Windows in Powershell)\n\n"
+    }
+}

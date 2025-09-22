@@ -1,0 +1,15 @@
+# mediamtx.yml
+
+# --- Protocols ---
+rtsp: yes
+rtmp: no
+hls: no
+webrtc: yes
+
+# --- WebRTC settings ---
+webrtcICEServers2: []
+
+# --- Paths ---
+paths:
+  all:
+    source: publisher

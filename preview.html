@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>MediaMTX 4×4 WebRTC Grid</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Optional: Roboto Regular across UI -->
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --tile-height: 180px;     /* tweak default tile height */
+      --gap: 10px;
+      --accent: #5998dd;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Roboto', sans-serif;
+      background: #f7f8fa;
+      color: #111;
+    }
+
+    header {
+      padding: 12px 16px;
+      background: #fff;
+      border-bottom: 1px solid #e6e7ea;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .controls label {
+      font-size: 0.9rem;
+      color: #555;
+      margin-right: 4px;
+    }
+
+    input[type="text"], input[type="number"] {
+      padding: 8px 10px;
+      border: 1px solid #ccd1d7;
+      border-radius: 6px;
+      min-width: 140px;
+      background: #fff;
+    }
+
+    input[type="range"] {
+      width: 160px;
+    }
+
+    button {
+      padding: 8px 14px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #fff;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: #fff;
+      color: var(--accent);
+    }
+
+    main {
+      padding: 12px;
+    }
+
+    .grid {
+      display: grid;
+      gap: var(--gap);
+      grid-template-columns: repeat(4, 1fr);
+    }
+
+    .tile {
+      background: #fff;
+      border: 1px solid #e0e3e8;
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .tile-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      background: #f2f5f8;
+      border-bottom: 1px solid #e6e7ea;
+      font-size: 0.9rem;
+    }
+
+    .tile-header .name {
+      color: #333;
+      font-weight: 400;
+    }
+
+    .tile-header a {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.85rem;
+    }
+
+    .tile iframe {
+      width: 100%;
+      height: var(--tile-height);
+      border: none;
+      display: block;
+      background: #000; /* avoids white flash while loading */
+    }
+
+    /* Responsive breakpoints */
+    @media (max-width: 1200px) {
+      .grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 600px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="controls">
+    <label for="baseUrl">Base URL</label>
+    <input id="baseUrl" type="text" value="http://127.0.0.1" />
+
+    <label for="port">Port</label>
+    <input id="port" type="number" value="8889" min="1" max="65535" />
+
+    <button id="connectBtn">Connect</button>
+    <button id="reloadBtn" class="secondary">Reload All</button>
+  </div>
+
+  <div class="controls">
+    <label for="heightRange">Tile height</label>
+    <input id="heightRange" type="range" min="120" max="360" step="10" value="180" />
+    <span id="heightVal">180px</span>
+  </div>
+</header>
+
+<main>
+  <div id="grid" class="grid" data-loaded="false"></div>
+</main>
+
+<script>
+  const grid = document.getElementById('grid');
+  const baseUrlInput = document.getElementById('baseUrl');
+  const portInput = document.getElementById('port');
+  const connectBtn = document.getElementById('connectBtn');
+  const reloadBtn = document.getElementById('reloadBtn');
+  const heightRange = document.getElementById('heightRange');
+  const heightVal = document.getElementById('heightVal');
+
+  // --- Local storage keys ---
+  const LS_BASE = "mediamtx_baseUrl";
+  const LS_PORT = "mediamtx_port";
+  const LS_HEIGHT = "mediamtx_tileHeight";
+
+  // Restore settings from localStorage on load
+  function restoreSettings() {
+    const savedBase = localStorage.getItem(LS_BASE);
+    const savedPort = localStorage.getItem(LS_PORT);
+    const savedHeight = localStorage.getItem(LS_HEIGHT);
+
+    if (savedBase) baseUrlInput.value = savedBase;
+    if (savedPort) portInput.value = savedPort;
+    if (savedHeight) {
+      heightRange.value = savedHeight;
+      applyTileHeight(savedHeight);
+    } else {
+      applyTileHeight(heightRange.value); // default
+    }
+  }
+
+  // Save settings to localStorage
+  function saveSettings() {
+    localStorage.setItem(LS_BASE, baseUrlInput.value);
+    localStorage.setItem(LS_PORT, portInput.value);
+    localStorage.setItem(LS_HEIGHT, heightRange.value);
+  }
+
+  function buildSrc(i) {
+    const base = baseUrlInput.value.replace(/\/+$/, ''); // trim trailing slash
+    const port = portInput.value;
+    return `${base}:${port}/src${i}/`;
+  }
+
+  function populateGrid() {
+    if (grid.dataset.loaded === 'true') return;
+    for (let i = 0; i < 16; i++) {
+      const tile = document.createElement('div');
+      tile.className = 'tile';
+
+      const header = document.createElement('div');
+      header.className = 'tile-header';
+
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = `src${i}`;
+
+      const openLink = document.createElement('a');
+      openLink.href = buildSrc(i);
+      openLink.target = '_blank';
+      openLink.rel = 'noopener';
+      openLink.textContent = 'Open';
+
+      header.appendChild(name);
+      header.appendChild(openLink);
+
+      const frame = document.createElement('iframe');
+      frame.dataset.index = i;
+      frame.src = buildSrc(i);
+
+      tile.appendChild(header);
+      tile.appendChild(frame);
+      grid.appendChild(tile);
+    }
+    grid.dataset.loaded = 'true';
+  }
+
+  function refreshSources() {
+    const frames = grid.querySelectorAll('iframe');
+    frames.forEach(f => {
+      const i = parseInt(f.dataset.index, 10);
+      const newSrc = buildSrc(i);
+      // Only reset if changed to avoid flicker
+      if (f.src !== newSrc) f.src = newSrc;
+      else if (f.contentWindow && f.contentWindow.location) {
+        f.contentWindow.location.reload();
+      }
+    });
+
+    // Update “Open” links in headers
+    const links = grid.querySelectorAll('.tile-header a');
+    links.forEach((a, idx) => { a.href = buildSrc(idx); });
+  }
+
+  // Controls
+  connectBtn.addEventListener('click', () => {
+    if (grid.dataset.loaded !== 'true') {
+      populateGrid();
+    }
+    refreshSources();
+    saveSettings();
+  });
+
+  reloadBtn.addEventListener('click', () => {
+    const frames = grid.querySelectorAll('iframe');
+    frames.forEach(f => {
+      f.contentWindow && f.contentWindow.location
+        ? f.contentWindow.location.reload()
+        : (f.src = f.src);
+    });
+  });
+
+  // Tile height control
+  function applyTileHeight(px) {
+    document.documentElement.style.setProperty('--tile-height', px + 'px');
+    heightVal.textContent = px + 'px';
+  }
+  heightRange.addEventListener('input', (e) => {
+    applyTileHeight(e.target.value);
+    saveSettings();
+  });
+
+  // Initial setup
+  restoreSettings();
+  populateGrid();      // Build once
+  refreshSources();    // Point to restored or default URL/port
+</script>
+
+</body>
+</html>
