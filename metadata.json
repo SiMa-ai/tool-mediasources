@@ -16,7 +16,7 @@
     "resources": [
         "https://docs.sima.ai/assets/multi-video-sources/videos-480p30.tar.gz",
         "https://docs.sima.ai/assets/multi-video-sources/videos-720p16.tar.gz",
-        "gh:paconsultings/tool-mediasources"
+        "gh:sima-ai/tool-mediasources"
     ],
     "size": {
         "download": "10MB",
