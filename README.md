@@ -54,8 +54,26 @@ mediasrc.bat ..\videos-480p30
 The folder should contain one or more .mp4 files.
 Each file will be exposed as its own RTSP stream.
 
+The launcher runs in foreground mode and uses a WebRTC-compatible H.264 profile
+(no B-frames) so streams can be viewed in `preview.html`.
+
+Press `Ctrl+C` to stop all launched stream publishers:
+
+```bash
+./mediasrc.sh ../videos-480p30
+```
+
+To force passthrough mode (`-c:v copy`), disable compatibility mode:
+
+```bash
+WEBRTC_COMPAT=0 ./mediasrc.sh ../videos-480p30
+```
+
 ### 5. Preview the streams
 
 ```bash
 open preview.html
 ```
+
+`mediasrc.sh` automatically writes `preview-config.js` so `preview.html`
+uses the detected number of input videos.

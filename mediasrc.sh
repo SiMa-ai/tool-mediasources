@@ -16,6 +16,13 @@ if [[ $# -lt 1 ]]; then
 fi
 
 MEDIA_DIR="$1"
+RTSP_PORT=8554
+WEBRTC_COMPAT="${WEBRTC_COMPAT:-1}"
+PIDS=()
+STARTED_MEDIAMTX=0
+MTX_PID=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PREVIEW_CONFIG_FILE="$SCRIPT_DIR/preview-config.js"
 
 if [[ ! -d "$MEDIA_DIR" ]]; then
     echo "❌ Error: '$MEDIA_DIR' is not a valid directory."
@@ -128,55 +135,117 @@ get_local_ip() {
     echo "127.0.0.1"
 }
 
+kill_existing_publisher() {
+    local src="$1"
+    local pattern="ffmpeg .*:${RTSP_PORT}/src${src}([[:space:]]|$)"
+    if pgrep -f "$pattern" >/dev/null 2>&1; then
+        echo "♻️ Replacing existing publisher on src${src}"
+        pkill -f "$pattern" || true
+        sleep 0.2
+    fi
+}
+
+cleanup() {
+    local exit_code=$?
+    trap - EXIT INT TERM
+
+    if [[ ${#PIDS[@]} -gt 0 ]]; then
+        echo "🛑 Stopping launched stream publishers..."
+        kill "${PIDS[@]}" 2>/dev/null || true
+        wait "${PIDS[@]}" 2>/dev/null || true
+    fi
+
+    if [[ "$STARTED_MEDIAMTX" == "1" ]] && [[ -n "$MTX_PID" ]]; then
+        echo "🛑 Stopping MediaMTX..."
+        kill "$MTX_PID" 2>/dev/null || true
+        wait "$MTX_PID" 2>/dev/null || true
+    fi
+
+    exit "$exit_code"
+}
+
 # --------------------------
 # Main
 # --------------------------
 install_ffmpeg
 install_mediamtx
+trap cleanup EXIT INT TERM
 
 # Start MediaMTX in background if not already running
 if ! pgrep -x mediamtx >/dev/null 2>&1; then
     echo "🚀 Starting MediaMTX server..."
-    nohup mediamtx ./mediamtx.yml >/tmp/mediamtx.log 2>&1 &
+    mediamtx ./mediamtx.yml >/tmp/mediamtx.log 2>&1 &
+    MTX_PID=$!
+    STARTED_MEDIAMTX=1
     sleep 2
 fi
 
-# Confirm MediaMTX is actually listening on 8554
-if ! lsof -i :8554 >/dev/null 2>&1; then
-    echo "❌ MediaMTX is not listening on port 8554. Check /tmp/mediamtx.log"
+# Confirm MediaMTX is actually listening on RTSP_PORT
+if ! lsof -i :"$RTSP_PORT" >/dev/null 2>&1; then
+    echo "❌ MediaMTX is not listening on port $RTSP_PORT. Check /tmp/mediamtx.log"
     exit 1
 fi
 
 LOCAL_IP=$(get_local_ip)
-echo "✅ MediaMTX running on rtsp://$LOCAL_IP:8554/"
+echo "✅ MediaMTX running on rtsp://$LOCAL_IP:$RTSP_PORT/"
 
 # --------------------------
-# Stream 16 MP4 files
+# Stream MP4 files in folder
 # --------------------------
 echo "📁 Scanning MP4 files in $MEDIA_DIR..."
-FILES=($(find "$MEDIA_DIR" -maxdepth 1 -type f -name "*.mp4" | sort))
+mapfile -t FILES < <(find "$MEDIA_DIR" -maxdepth 1 -type f -name "*.mp4" | sort)
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
     echo "⚠️ No .mp4 files found in $MEDIA_DIR"
     exit 1
 fi
 
+cat > "$PREVIEW_CONFIG_FILE" <<EOF
+window.MEDIASRC_CONFIG = {
+  streamCount: ${#FILES[@]},
+  baseUrl: "http://$LOCAL_IP",
+  port: 8889
+};
+EOF
+echo "🧩 Wrote preview config: $PREVIEW_CONFIG_FILE (streams=${#FILES[@]})"
+
 for i in "${!FILES[@]}"; do
     INPUT="${FILES[$i]}"
     SRC=$i
-    URL="rtsp://$LOCAL_IP:8554/src$SRC"
+    URL="rtsp://$LOCAL_IP:$RTSP_PORT/src$SRC"
 
+    kill_existing_publisher "$SRC"
     echo "🎥 Streaming $INPUT -> $URL"
-    (
-        ffmpeg -re -stream_loop -1 -i "$INPUT" \
-            -c:v copy -an \
-            -f rtsp "$URL" \
-            > "/tmp/ffmpeg_src${SRC}.log" 2>&1
-    ) &
+    if [[ "$WEBRTC_COMPAT" == "1" ]]; then
+        FFMPEG_ARGS=(
+            ffmpeg -nostdin -re -stream_loop -1 -i "$INPUT"
+            -an
+            -c:v libx264
+            -preset ultrafast
+            -tune zerolatency
+            -pix_fmt yuv420p
+            -profile:v baseline
+            -x264-params "bframes=0:keyint=30:min-keyint=30:scenecut=0"
+            -f rtsp "$URL"
+        )
+    else
+        FFMPEG_ARGS=(
+            ffmpeg -nostdin -re -stream_loop -1 -i "$INPUT"
+            -c:v copy -an
+            -f rtsp "$URL"
+        )
+    fi
+
+    "${FFMPEG_ARGS[@]}" > "/tmp/ffmpeg_src${SRC}.log" 2>&1 &
+    PIDS+=($!)
 done
 
 echo "✅ All available streams launched."
-echo "👉 Example: ffplay rtsp://127.0.0.1:8554/src1"
+echo "👉 Example: ffplay rtsp://127.0.0.1:$RTSP_PORT/src1"
 
-# Keep script alive to babysit background jobs
+if [[ "$WEBRTC_COMPAT" == "1" ]]; then
+    echo "✅ WebRTC compatibility mode enabled (H.264 baseline, no B-frames)."
+fi
+
+echo "🟢 Running in foreground. Press Ctrl+C to stop all launched streams."
 wait
