@@ -2,6 +2,7 @@
 
 # --- Protocols ---
 rtsp: yes
+rtspAddress: :8554
 rtmp: no
 hls: no
 webrtc: yes

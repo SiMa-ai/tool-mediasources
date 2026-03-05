@@ -142,6 +142,9 @@
     <label for="port">Port</label>
     <input id="port" type="number" value="8889" min="1" max="65535" />
 
+    <label for="streamCount">Streams</label>
+    <input id="streamCount" type="number" value="5" min="1" max="64" />
+
     <button id="connectBtn">Connect</button>
     <button id="reloadBtn" class="secondary">Reload All</button>
   </div>
@@ -157,10 +160,12 @@
   <div id="grid" class="grid" data-loaded="false"></div>
 </main>
 
+<script src="preview-config.js"></script>
 <script>
   const grid = document.getElementById('grid');
   const baseUrlInput = document.getElementById('baseUrl');
   const portInput = document.getElementById('port');
+  const streamCountInput = document.getElementById('streamCount');
   const connectBtn = document.getElementById('connectBtn');
   const reloadBtn = document.getElementById('reloadBtn');
   const heightRange = document.getElementById('heightRange');
@@ -169,16 +174,33 @@
   // --- Local storage keys ---
   const LS_BASE = "mediamtx_baseUrl";
   const LS_PORT = "mediamtx_port";
+  const LS_STREAMS = "mediamtx_streamCount";
   const LS_HEIGHT = "mediamtx_tileHeight";
+  const RUNTIME_CFG = window.MEDIASRC_CONFIG || {};
+  let currentCount = 0;
 
   // Restore settings from localStorage on load
   function restoreSettings() {
     const savedBase = localStorage.getItem(LS_BASE);
     const savedPort = localStorage.getItem(LS_PORT);
+    const savedStreams = localStorage.getItem(LS_STREAMS);
     const savedHeight = localStorage.getItem(LS_HEIGHT);
 
     if (savedBase) baseUrlInput.value = savedBase;
     if (savedPort) portInput.value = savedPort;
+    if (savedStreams) streamCountInput.value = savedStreams;
+
+    // Latest mediasrc.sh run overrides stale local settings.
+    if (typeof RUNTIME_CFG.baseUrl === "string" && RUNTIME_CFG.baseUrl) {
+      baseUrlInput.value = RUNTIME_CFG.baseUrl;
+    }
+    if (Number.isInteger(RUNTIME_CFG.port) && RUNTIME_CFG.port > 0) {
+      portInput.value = String(RUNTIME_CFG.port);
+    }
+    if (Number.isInteger(RUNTIME_CFG.streamCount) && RUNTIME_CFG.streamCount > 0) {
+      streamCountInput.value = String(RUNTIME_CFG.streamCount);
+    }
+
     if (savedHeight) {
       heightRange.value = savedHeight;
       applyTileHeight(savedHeight);
@@ -191,7 +213,14 @@
   function saveSettings() {
     localStorage.setItem(LS_BASE, baseUrlInput.value);
     localStorage.setItem(LS_PORT, portInput.value);
+    localStorage.setItem(LS_STREAMS, streamCountInput.value);
     localStorage.setItem(LS_HEIGHT, heightRange.value);
+  }
+
+  function getStreamCount() {
+    const count = parseInt(streamCountInput.value, 10);
+    if (!Number.isInteger(count) || count < 1) return 5;
+    return Math.min(count, 64);
   }
 
   function buildSrc(i) {
@@ -201,8 +230,11 @@
   }
 
   function populateGrid() {
-    if (grid.dataset.loaded === 'true') return;
-    for (let i = 0; i < 16; i++) {
+    const targetCount = getStreamCount();
+    if (grid.dataset.loaded === 'true' && currentCount === targetCount) return;
+
+    grid.innerHTML = '';
+    for (let i = 0; i < targetCount; i++) {
       const tile = document.createElement('div');
       tile.className = 'tile';
 
@@ -230,6 +262,7 @@
       tile.appendChild(frame);
       grid.appendChild(tile);
     }
+    currentCount = targetCount;
     grid.dataset.loaded = 'true';
   }
 
@@ -252,9 +285,7 @@
 
   // Controls
   connectBtn.addEventListener('click', () => {
-    if (grid.dataset.loaded !== 'true') {
-      populateGrid();
-    }
+    populateGrid();
     refreshSources();
     saveSettings();
   });

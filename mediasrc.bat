@@ -17,6 +17,7 @@ setlocal enabledelayedexpansion
 :: Configuration
 :: ---------------------------------------
 set "MEDIA_DIR=%~1"
+set "RTSP_PORT=8554"
 set "TOOLS_DIR=%~dp0tools"
 set "FFMPEG_PATH=%TOOLS_DIR%\ffmpeg\bin"
 set "MEDIAMTX_PATH=%TOOLS_DIR%\mediamtx"
@@ -112,7 +113,7 @@ if "!LOCAL_IP!"=="" (
     set "LOCAL_IP=127.0.0.1"
 )
 
-echo MediaMTX running on rtsp://!LOCAL_IP!:8554/
+echo MediaMTX running on rtsp://!LOCAL_IP!:!RTSP_PORT!/
 
 :: ---------------------------------------
 :: Scan and stream video files
@@ -143,7 +144,7 @@ if not exist "!INPUT!" (
     goto :eof
 )
 
-set "URL=rtsp://!LOCAL_IP!:8554/src!SRC!"
+set "URL=rtsp://!LOCAL_IP!:!RTSP_PORT!/src!SRC!"
 echo Streaming !INPUT! : !URL!
 
 :: Debug: Verify ffmpeg path
@@ -163,7 +164,7 @@ goto :eof
 
 :after_streams
 echo All available streams launched.
-echo Example: ffplay rtsp://!LOCAL_IP!:8554/src1
+echo Example: ffplay rtsp://!LOCAL_IP!:!RTSP_PORT!/src1
 
 pause
 
