@@ -77,3 +77,42 @@ open preview.html
 
 `mediasrc.sh` automatically writes `preview-config.js` so `preview.html`
 uses the detected number of input videos.
+
+
+## UDP Preview Relay
+
+`mediasrc-udp.sh` is a companion launcher for live publishers that already emit
+H.264 over RTP/UDP. It creates one MediaMTX relay per UDP input port and writes
+`preview-udp-config.js` so the browser grid can open the matching WebRTC paths.
+The UDP launcher expects `ffmpeg` and `mediamtx` to already be available in
+`PATH`.
+
+### Start UDP relays
+
+```bash
+./mediasrc-udp.sh --streams 4 --port-base 5600
+```
+
+This reserves the following inputs by default:
+
+- UDP `5600` -> RTSP/WebRTC path `/udp0`
+- UDP `5601` -> RTSP/WebRTC path `/udp1`
+- UDP `5602` -> RTSP/WebRTC path `/udp2`
+- UDP `5603` -> RTSP/WebRTC path `/udp3`
+
+Generated SDP files and relay logs are written under `.mediasrc-udp/`.
+
+### Preview the UDP-backed streams
+
+```bash
+open preview-udp.html
+```
+
+### Dry-run the setup
+
+```bash
+./mediasrc-udp.sh --streams 4 --port-base 5600 --dry-run
+```
+
+Dry-run mode writes the runtime config and SDP files without starting MediaMTX
+or FFmpeg relay processes.
