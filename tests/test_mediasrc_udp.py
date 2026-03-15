@@ -20,6 +20,13 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _free_even_port() -> int:
+    port = _free_port()
+    if port % 2 == 0:
+        return port
+    return port + 1
+
+
 def _wait_for_text(path: Path, needle: str, timeout: float) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -57,12 +64,346 @@ def test_dry_run_writes_udp_preview_config_and_sdps(tmp_path: Path) -> None:
         sdp_path = runtime_dir / f"udp{idx}.sdp"
         assert sdp_path.is_file(), f"missing {sdp_path.name}"
         sdp_text = sdp_path.read_text(encoding="utf-8")
-        assert f"m=video {5600 + idx} RTP/AVP 96" in sdp_text
+        assert f"m=video {5600 + (2 * idx)} RTP/AVP 96" in sdp_text
         assert "a=rtpmap:96 H264/90000" in sdp_text
 
     stdout = result.stdout
     assert "rtsp://" in stdout
     assert "/udp0" in stdout
+    assert ":9554/udp0" in stdout
+
+
+def test_dry_run_rejects_odd_port_base(tmp_path: Path) -> None:
+    runtime_dir = tmp_path / "runtime"
+    preview_config = tmp_path / "preview-udp-config.js"
+    env = os.environ.copy()
+    env["MEDIASRC_UDP_STATE_DIR"] = str(runtime_dir)
+    env["MEDIASRC_UDP_PREVIEW_CONFIG_FILE"] = str(preview_config)
+    env["MEDIASRC_UDP_HOST"] = "127.0.0.1"
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--dry-run", "--streams", "2", "--port-base", "5601"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert result.returncode != 0
+    assert "even" in result.stdout.lower() or "even" in result.stderr.lower()
+
+
+def test_live_launcher_ignores_broken_ss_and_netstat_when_waiting_for_rtsp_port(tmp_path: Path) -> None:
+    runtime_dir = tmp_path / "runtime"
+    preview_config = tmp_path / "preview-udp-config.js"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+
+    rtsp_port = _free_port()
+    preview_port = _free_port()
+
+    def _write_exe(name: str, body: str) -> None:
+        path = fake_bin / name
+        path.write_text(body, encoding="utf-8")
+        path.chmod(0o755)
+
+    _write_exe(
+        "ss",
+        """#!/usr/bin/env bash
+exit 1
+""",
+    )
+    _write_exe(
+        "netstat",
+        """#!/usr/bin/env bash
+exit 1
+""",
+    )
+    _write_exe(
+        "mediamtx",
+        """#!/usr/bin/env python3
+import os
+import signal
+import socket
+import sys
+import time
+
+raw = os.environ.get("MTX_RTSPADDRESS", ":9554")
+port = int(raw.rsplit(":", 1)[1])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.bind(("127.0.0.1", port))
+sock.listen(1)
+
+def shutdown(*_args):
+    sock.close()
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, shutdown)
+signal.signal(signal.SIGINT, shutdown)
+
+while True:
+    time.sleep(0.2)
+""",
+    )
+    _write_exe(
+        "ffmpeg",
+        """#!/usr/bin/env python3
+import signal
+import sys
+import time
+
+def shutdown(*_args):
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, shutdown)
+signal.signal(signal.SIGINT, shutdown)
+
+while True:
+    time.sleep(0.2)
+""",
+    )
+
+    env = os.environ.copy()
+    env["MEDIASRC_UDP_STATE_DIR"] = str(runtime_dir)
+    env["MEDIASRC_UDP_PREVIEW_CONFIG_FILE"] = str(preview_config)
+    env["MEDIASRC_UDP_HOST"] = "127.0.0.1"
+    env["RTSP_PORT"] = str(rtsp_port)
+    env["PREVIEW_HTTP_PORT"] = str(preview_port)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    launcher = subprocess.Popen(
+        ["bash", str(SCRIPT), "--streams", "1", "--port-base", "5600"],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    try:
+        ffmpeg_log = runtime_dir / "logs" / "ffmpeg_udp0.log"
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if preview_config.exists() and ffmpeg_log.exists() and launcher.poll() is None:
+                break
+            if launcher.poll() is not None:
+                break
+            time.sleep(0.25)
+
+        assert preview_config.exists(), "launcher did not write preview config"
+        assert ffmpeg_log.exists(), "launcher never reached the relay launch stage"
+        assert launcher.poll() is None, "launcher exited before UDP relays were launched"
+    finally:
+        if launcher.poll() is None:
+            launcher.terminate()
+            try:
+                launcher.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                launcher.kill()
+                launcher.wait(timeout=10)
+
+
+def test_launcher_retries_relay_and_stays_attached_until_interrupted(tmp_path: Path) -> None:
+    runtime_dir = tmp_path / "runtime"
+    preview_config = tmp_path / "preview-udp-config.js"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+
+    rtsp_port = _free_port()
+    preview_port = _free_port()
+    ffmpeg_counter = tmp_path / "ffmpeg-count.txt"
+    mediamtx_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    mediamtx_listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    mediamtx_listener.bind(("127.0.0.1", rtsp_port))
+    mediamtx_listener.listen(1)
+
+    def _write_exe(name: str, body: str) -> None:
+        path = fake_bin / name
+        path.write_text(body, encoding="utf-8")
+        path.chmod(0o755)
+
+    _write_exe(
+        "mediamtx",
+        """#!/usr/bin/env bash
+sleep 60
+""",
+    )
+    _write_exe(
+        "ffmpeg",
+        f"""#!/usr/bin/env python3
+import pathlib
+import signal
+import sys
+import time
+
+counter_path = pathlib.Path(r"{ffmpeg_counter}")
+count = 0
+if counter_path.exists():
+    count = int(counter_path.read_text(encoding="utf-8") or "0")
+count += 1
+counter_path.write_text(str(count), encoding="utf-8")
+
+if count == 1:
+    sys.exit(1)
+
+def shutdown(*_args):
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, shutdown)
+signal.signal(signal.SIGINT, shutdown)
+
+while True:
+    time.sleep(0.2)
+""",
+    )
+
+    env = os.environ.copy()
+    env["MEDIASRC_UDP_STATE_DIR"] = str(runtime_dir)
+    env["MEDIASRC_UDP_PREVIEW_CONFIG_FILE"] = str(preview_config)
+    env["MEDIASRC_UDP_HOST"] = "127.0.0.1"
+    env["RTSP_PORT"] = str(rtsp_port)
+    env["PREVIEW_HTTP_PORT"] = str(preview_port)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    launcher = subprocess.Popen(
+        ["bash", str(SCRIPT), "--streams", "1", "--port-base", "5600"],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    try:
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if ffmpeg_counter.exists():
+                try:
+                    if int(ffmpeg_counter.read_text(encoding="utf-8")) >= 2 and launcher.poll() is None:
+                        break
+                except ValueError:
+                    pass
+            if launcher.poll() is not None:
+                break
+            time.sleep(0.25)
+
+        assert launcher.poll() is None, "launcher exited instead of staying attached"
+        assert ffmpeg_counter.exists(), "relay was never started"
+        assert int(ffmpeg_counter.read_text(encoding="utf-8")) >= 2, "relay was not retried"
+    finally:
+        mediamtx_listener.close()
+        if launcher.poll() is None:
+            launcher.terminate()
+            try:
+                launcher.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                launcher.kill()
+                launcher.wait(timeout=10)
+
+
+def test_launcher_passes_probe_window_to_ffmpeg(tmp_path: Path) -> None:
+    runtime_dir = tmp_path / "runtime"
+    preview_config = tmp_path / "preview-udp-config.js"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+
+    rtsp_port = _free_port()
+    preview_port = _free_port()
+    ffmpeg_args = tmp_path / "ffmpeg-args.txt"
+
+    def _write_exe(name: str, body: str) -> None:
+        path = fake_bin / name
+        path.write_text(body, encoding="utf-8")
+        path.chmod(0o755)
+
+    _write_exe(
+        "mediamtx",
+        """#!/usr/bin/env python3
+import os
+import signal
+import socket
+import sys
+import time
+
+raw = os.environ.get("MTX_RTSPADDRESS", ":9554")
+port = int(raw.rsplit(":", 1)[1])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.bind(("127.0.0.1", port))
+sock.listen(1)
+
+def shutdown(*_args):
+    sock.close()
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, shutdown)
+signal.signal(signal.SIGINT, shutdown)
+
+while True:
+    time.sleep(0.2)
+""",
+    )
+    _write_exe(
+        "ffmpeg",
+        f"""#!/usr/bin/env python3
+import pathlib
+import signal
+import sys
+import time
+
+pathlib.Path(r"{ffmpeg_args}").write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
+
+def shutdown(*_args):
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, shutdown)
+signal.signal(signal.SIGINT, shutdown)
+
+while True:
+    time.sleep(0.2)
+""",
+    )
+
+    env = os.environ.copy()
+    env["MEDIASRC_UDP_STATE_DIR"] = str(runtime_dir)
+    env["MEDIASRC_UDP_PREVIEW_CONFIG_FILE"] = str(preview_config)
+    env["MEDIASRC_UDP_HOST"] = "127.0.0.1"
+    env["RTSP_PORT"] = str(rtsp_port)
+    env["PREVIEW_HTTP_PORT"] = str(preview_port)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    launcher = subprocess.Popen(
+        ["bash", str(SCRIPT), "--streams", "1", "--port-base", "5600"],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    try:
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if ffmpeg_args.exists():
+                break
+            if launcher.poll() is not None:
+                break
+            time.sleep(0.25)
+
+        assert ffmpeg_args.exists(), "launcher did not invoke ffmpeg"
+        args = ffmpeg_args.read_text(encoding="utf-8").splitlines()
+        assert "-analyzeduration" in args
+        assert "-probesize" in args
+    finally:
+        if launcher.poll() is None:
+            launcher.terminate()
+            try:
+                launcher.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                launcher.kill()
+                launcher.wait(timeout=10)
 
 
 @pytest.mark.skipif(
@@ -72,7 +413,7 @@ def test_dry_run_writes_udp_preview_config_and_sdps(tmp_path: Path) -> None:
 def test_live_udp_relay_publishes_rtsp_stream(tmp_path: Path) -> None:
     runtime_dir = tmp_path / "runtime"
     preview_config = tmp_path / "preview-udp-config.js"
-    udp_port = _free_port()
+    udp_port = _free_even_port()
     rtsp_port = _free_port()
     preview_port = _free_port()
 

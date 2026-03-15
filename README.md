@@ -10,7 +10,7 @@ The **Multi-Stream RTSP Launcher** is a Bash tool designed to quickly stand up a
 
 It automatically:  
 - Installs **FFmpeg** and **MediaMTX** if not already available.  
-- Starts a local RTSP server (`rtsp://<local-ip>:8554/`).  
+- Starts a local RTSP server (`rtsp://<local-ip>:9554/`).  
 - Scans a media folder for `.mp4` files.  
 - Streams each file as a unique RTSP source (`/src0`, `/src1`, …).  
 - Keeps processes alive and logs FFmpeg output to `/tmp/ffmpeg_src<N>.log`.  
@@ -96,9 +96,12 @@ The UDP launcher expects `ffmpeg` and `mediamtx` to already be available in
 This reserves the following inputs by default:
 
 - UDP `5600` -> RTSP/WebRTC path `/udp0`
-- UDP `5601` -> RTSP/WebRTC path `/udp1`
-- UDP `5602` -> RTSP/WebRTC path `/udp2`
-- UDP `5603` -> RTSP/WebRTC path `/udp3`
+- UDP `5602` -> RTSP/WebRTC path `/udp1`
+- UDP `5604` -> RTSP/WebRTC path `/udp2`
+- UDP `5606` -> RTSP/WebRTC path `/udp3`
+
+`--port-base` must be even. Each relay reserves an RTP/RTCP port pair, so the
+odd port beside each listed RTP port is left available for RTCP.
 
 Generated SDP files and relay logs are written under `.mediasrc-udp/`.
 

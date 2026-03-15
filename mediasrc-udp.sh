@@ -5,9 +5,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${MEDIASRC_UDP_STATE_DIR:-$SCRIPT_DIR/.mediasrc-udp}"
 PREVIEW_CONFIG_FILE="${MEDIASRC_UDP_PREVIEW_CONFIG_FILE:-$SCRIPT_DIR/preview-udp-config.js}"
-RTSP_PORT="${RTSP_PORT:-8554}"
+RTSP_PORT="${RTSP_PORT:-9554}"
 PREVIEW_HTTP_PORT="${PREVIEW_HTTP_PORT:-8889}"
 HOST_OVERRIDE="${MEDIASRC_UDP_HOST:-}"
+FFMPEG_ANALYZE_DURATION_US="${MEDIASRC_UDP_ANALYZE_DURATION_US:-3000000}"
+FFMPEG_PROBE_SIZE_BYTES="${MEDIASRC_UDP_PROBE_SIZE_BYTES:-5000000}"
 STREAMS=1
 PORT_BASE=5600
 PATH_PREFIX="udp"
@@ -17,11 +19,18 @@ STARTED_MEDIAMTX=0
 MTX_PID=""
 LOG_DIR=""
 
+udp_port_for_stream() {
+    local port_base="$1"
+    local idx="$2"
+    echo $((port_base + (2 * idx)))
+}
+
 usage() {
     cat <<'EOF'
 Usage: ./mediasrc-udp.sh [--streams N] [--port-base PORT] [--path-prefix PREFIX] [--dry-run]
 
 Relays incoming H.264 RTP/UDP streams into MediaMTX RTSP paths for browser preview.
+PORT must be even so each stream can reserve an RTP/RTCP port pair.
 EOF
 }
 
@@ -44,27 +53,30 @@ install_mediamtx() {
 port_is_listening() {
     local port="$1"
 
-    if command -v ss >/dev/null 2>&1; then
-        ss -ltn "sport = :${port}" 2>/dev/null | awk 'NR > 1 {found = 1} END {exit found ? 0 : 1}'
-        return
-    fi
-
-    if command -v netstat >/dev/null 2>&1; then
-        netstat -ltn 2>/dev/null | awk -v port=":${port}" '$4 ~ port"$" {found = 1} END {exit found ? 0 : 1}'
-        return
-    fi
-
     python3 - "$port" <<'PY'
+import errno
 import socket
 import sys
 
 port = int(sys.argv[1])
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.settimeout(0.2)
-try:
-    sys.exit(0 if sock.connect_ex(("127.0.0.1", port)) == 0 else 1)
-finally:
-    sock.close()
+
+for family, socktype, proto, _, sockaddr in socket.getaddrinfo(
+    "localhost",
+    port,
+    type=socket.SOCK_STREAM,
+):
+    sock = socket.socket(family, socktype, proto)
+    sock.settimeout(0.2)
+    try:
+        rc = sock.connect_ex(sockaddr)
+        if rc == 0:
+            sys.exit(0)
+        if rc not in (errno.ECONNREFUSED, errno.EHOSTUNREACH, errno.ENETUNREACH):
+            continue
+    finally:
+        sock.close()
+
+sys.exit(1)
 PY
 }
 
@@ -123,6 +135,49 @@ cleanup() {
     exit "$exit_code"
 }
 
+start_relay_supervisor() {
+    local idx="$1"
+    local sdp_path="$2"
+    local rtsp_url="$3"
+    local log_file="$4"
+
+    (
+        local relay_pid=""
+        trap '
+            if [[ -n "${relay_pid:-}" ]]; then
+                kill "$relay_pid" 2>/dev/null || true
+                wait "$relay_pid" 2>/dev/null || true
+            fi
+            exit 0
+        ' INT TERM
+
+        while true; do
+            ffmpeg -nostdin \
+                -protocol_whitelist file,udp,rtp \
+                -analyzeduration "$FFMPEG_ANALYZE_DURATION_US" \
+                -probesize "$FFMPEG_PROBE_SIZE_BYTES" \
+                -fflags +genpts \
+                -i "$sdp_path" \
+                -an \
+                -c:v copy \
+                -f rtsp \
+                "$rtsp_url" >"$log_file" 2>&1 &
+            relay_pid=$!
+
+            if wait "$relay_pid"; then
+                relay_rc=0
+            else
+                relay_rc=$?
+            fi
+            relay_pid=""
+
+            echo "⚠️ Relay ${PATH_PREFIX}${idx} exited with code ${relay_rc}. Retrying in 1s. Check ${log_file}" >&2
+            sleep 1
+        done
+    ) &
+    PIDS+=($!)
+}
+
 write_preview_config() {
     local local_ip="$1"
     mkdir -p "$(dirname "$PREVIEW_CONFIG_FILE")"
@@ -138,7 +193,8 @@ EOF
 
 write_sdp() {
     local idx="$1"
-    local udp_port=$((PORT_BASE + idx))
+    local udp_port
+    udp_port="$(udp_port_for_stream "$PORT_BASE" "$idx")"
     mkdir -p "$STATE_DIR"
     cat > "$STATE_DIR/${PATH_PREFIX}${idx}.sdp" <<EOF
 v=0
@@ -178,17 +234,9 @@ start_relays() {
     for ((i = 0; i < STREAMS; i++)); do
         local sdp_path="$STATE_DIR/${PATH_PREFIX}${i}.sdp"
         local rtsp_url="rtsp://${local_ip}:${RTSP_PORT}/${PATH_PREFIX}${i}"
-        echo "🎯 Listening on UDP port $((PORT_BASE + i)) -> ${rtsp_url}"
-
-        ffmpeg -nostdin \
-            -protocol_whitelist file,udp,rtp \
-            -fflags +genpts \
-            -i "$sdp_path" \
-            -an \
-            -c:v copy \
-            -f rtsp \
-            "$rtsp_url" >"$LOG_DIR/ffmpeg_${PATH_PREFIX}${i}.log" 2>&1 &
-        PIDS+=($!)
+        local log_file="$LOG_DIR/ffmpeg_${PATH_PREFIX}${i}.log"
+        echo "🎯 Listening on UDP port $(udp_port_for_stream "$PORT_BASE" "$i") -> ${rtsp_url}"
+        start_relay_supervisor "$i" "$sdp_path" "$rtsp_url" "$log_file"
     done
 }
 
@@ -227,6 +275,16 @@ if [[ "$STREAMS" -le 0 ]]; then
     exit 1
 fi
 
+if [[ "$PORT_BASE" -le 0 ]]; then
+    echo "❌ --port-base must be > 0"
+    exit 1
+fi
+
+if [[ $((PORT_BASE % 2)) -ne 0 ]]; then
+    echo "❌ --port-base must be even so each stream keeps an RTP/RTCP port pair"
+    exit 1
+fi
+
 trap cleanup EXIT INT TERM
 
 LOG_DIR="$STATE_DIR/logs"
@@ -239,7 +297,7 @@ for ((i = 0; i < STREAMS; i++)); do
 done
 
 for ((i = 0; i < STREAMS; i++)); do
-    echo "📡 UDP port $((PORT_BASE + i)) -> rtsp://${LOCAL_IP}:${RTSP_PORT}/${PATH_PREFIX}${i}"
+    echo "📡 UDP port $(udp_port_for_stream "$PORT_BASE" "$i") -> rtsp://${LOCAL_IP}:${RTSP_PORT}/${PATH_PREFIX}${i}"
 done
 
 if [[ "$DRY_RUN" == "1" ]]; then

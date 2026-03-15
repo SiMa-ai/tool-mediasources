@@ -17,7 +17,7 @@ setlocal enabledelayedexpansion
 :: Configuration
 :: ---------------------------------------
 set "MEDIA_DIR=%~1"
-set "RTSP_PORT=8554"
+set "RTSP_PORT=9554"
 set "TOOLS_DIR=%~dp0tools"
 set "FFMPEG_PATH=%TOOLS_DIR%\ffmpeg\bin"
 set "MEDIAMTX_PATH=%TOOLS_DIR%\mediamtx"
