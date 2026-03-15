@@ -10,7 +10,7 @@ The **Multi-Stream RTSP Launcher** is a Bash tool designed to quickly stand up a
 
 It automatically:  
 - Installs **FFmpeg** and **MediaMTX** if not already available.  
-- Starts a local RTSP server (`rtsp://<local-ip>:8554/`).  
+- Starts a local RTSP server (`rtsp://<local-ip>:9554/`).  
 - Scans a media folder for `.mp4` files.  
 - Streams each file as a unique RTSP source (`/src0`, `/src1`, …).  
 - Keeps processes alive and logs FFmpeg output to `/tmp/ffmpeg_src<N>.log`.  
@@ -77,3 +77,45 @@ open preview.html
 
 `mediasrc.sh` automatically writes `preview-config.js` so `preview.html`
 uses the detected number of input videos.
+
+
+## UDP Preview Relay
+
+`mediasrc-udp.sh` is a companion launcher for live publishers that already emit
+H.264 over RTP/UDP. It creates one MediaMTX relay per UDP input port and writes
+`preview-udp-config.js` so the browser grid can open the matching WebRTC paths.
+The UDP launcher expects `ffmpeg` and `mediamtx` to already be available in
+`PATH`.
+
+### Start UDP relays
+
+```bash
+./mediasrc-udp.sh --streams 4 --port-base 5600
+```
+
+This reserves the following inputs by default:
+
+- UDP `5600` -> RTSP/WebRTC path `/udp0`
+- UDP `5602` -> RTSP/WebRTC path `/udp1`
+- UDP `5604` -> RTSP/WebRTC path `/udp2`
+- UDP `5606` -> RTSP/WebRTC path `/udp3`
+
+`--port-base` must be even. Each relay reserves an RTP/RTCP port pair, so the
+odd port beside each listed RTP port is left available for RTCP.
+
+Generated SDP files and relay logs are written under `.mediasrc-udp/`.
+
+### Preview the UDP-backed streams
+
+```bash
+open preview-udp.html
+```
+
+### Dry-run the setup
+
+```bash
+./mediasrc-udp.sh --streams 4 --port-base 5600 --dry-run
+```
+
+Dry-run mode writes the runtime config and SDP files without starting MediaMTX
+or FFmpeg relay processes.
