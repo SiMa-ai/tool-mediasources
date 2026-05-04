@@ -1,1 +1,5 @@
 preview-config.js
+preview-udp-config.js
+.mediasrc-udp/
+tests/__pycache__/
+*.mp4
