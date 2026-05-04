@@ -16,12 +16,15 @@ if [[ $# -lt 1 ]]; then
 fi
 
 MEDIA_DIR="$1"
-RTSP_PORT=8554
+RTSP_PORT="${RTSP_PORT:-8554}"
 WEBRTC_COMPAT="${WEBRTC_COMPAT:-1}"
 PIDS=()
 STARTED_MEDIAMTX=0
 MTX_PID=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MEDIAMTX_CONFIG_FILE="$SCRIPT_DIR/mediamtx.yml"
+MEDIAMTX_CONFIG_TO_USE="$MEDIAMTX_CONFIG_FILE"
+MEDIAMTX_RUNTIME_CONFIG=""
 PREVIEW_CONFIG_FILE="$SCRIPT_DIR/preview-config.js"
 
 if [[ ! -d "$MEDIA_DIR" ]]; then
@@ -135,6 +138,26 @@ get_local_ip() {
     echo "127.0.0.1"
 }
 
+port_listener_info() {
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null || true
+}
+
+is_mediamtx_listening() {
+    port_listener_info "$RTSP_PORT" | awk 'NR > 1 && $1 == "mediamtx" { found = 1 } END { exit found ? 0 : 1 }'
+}
+
+write_mediamtx_runtime_config() {
+    MEDIAMTX_CONFIG_TO_USE="$MEDIAMTX_CONFIG_FILE"
+
+    if [[ "$RTSP_PORT" == "8554" ]]; then
+        return 0
+    fi
+
+    MEDIAMTX_RUNTIME_CONFIG=$(mktemp "${TMPDIR:-/tmp}/mediamtx.XXXXXX.yml")
+    sed "s/^rtspAddress:.*/rtspAddress: :$RTSP_PORT/" "$MEDIAMTX_CONFIG_FILE" > "$MEDIAMTX_RUNTIME_CONFIG"
+    MEDIAMTX_CONFIG_TO_USE="$MEDIAMTX_RUNTIME_CONFIG"
+}
+
 kill_existing_publisher() {
     local src="$1"
     local pattern="ffmpeg .*:${RTSP_PORT}/src${src}([[:space:]]|$)"
@@ -161,6 +184,10 @@ cleanup() {
         wait "$MTX_PID" 2>/dev/null || true
     fi
 
+    if [[ -n "$MEDIAMTX_RUNTIME_CONFIG" ]] && [[ -f "$MEDIAMTX_RUNTIME_CONFIG" ]]; then
+        rm -f "$MEDIAMTX_RUNTIME_CONFIG"
+    fi
+
     exit "$exit_code"
 }
 
@@ -172,17 +199,33 @@ install_mediamtx
 trap cleanup EXIT INT TERM
 
 # Start MediaMTX in background if not already running
-if ! pgrep -x mediamtx >/dev/null 2>&1; then
+if is_mediamtx_listening; then
+    echo "✅ Reusing MediaMTX already listening on port $RTSP_PORT"
+elif [[ -n "$(port_listener_info "$RTSP_PORT")" ]]; then
+    echo "❌ Port $RTSP_PORT is already in use by a non-MediaMTX process:"
+    port_listener_info "$RTSP_PORT"
+    echo "   Stop that process or choose another port, for example:"
+    echo "   RTSP_PORT=8555 $0 \"$MEDIA_DIR\""
+    exit 1
+else
     echo "🚀 Starting MediaMTX server..."
-    mediamtx ./mediamtx.yml >/tmp/mediamtx.log 2>&1 &
+    write_mediamtx_runtime_config
+    mediamtx "$MEDIAMTX_CONFIG_TO_USE" >/tmp/mediamtx.log 2>&1 &
     MTX_PID=$!
     STARTED_MEDIAMTX=1
     sleep 2
+
+    if ! kill -0 "$MTX_PID" 2>/dev/null; then
+        echo "❌ MediaMTX exited during startup. Check /tmp/mediamtx.log:"
+        tail -40 /tmp/mediamtx.log 2>/dev/null || true
+        exit 1
+    fi
 fi
 
 # Confirm MediaMTX is actually listening on RTSP_PORT
-if ! lsof -i :"$RTSP_PORT" >/dev/null 2>&1; then
-    echo "❌ MediaMTX is not listening on port $RTSP_PORT. Check /tmp/mediamtx.log"
+if ! is_mediamtx_listening; then
+    echo "❌ MediaMTX is not listening on port $RTSP_PORT. Check /tmp/mediamtx.log:"
+    tail -40 /tmp/mediamtx.log 2>/dev/null || true
     exit 1
 fi
 
@@ -193,7 +236,10 @@ echo "✅ MediaMTX running on rtsp://$LOCAL_IP:$RTSP_PORT/"
 # Stream MP4 files in folder
 # --------------------------
 echo "📁 Scanning MP4 files in $MEDIA_DIR..."
-mapfile -t FILES < <(find "$MEDIA_DIR" -maxdepth 1 -type f -name "*.mp4" | sort)
+FILES=()
+while IFS= read -r file; do
+    FILES+=("$file")
+done < <(find "$MEDIA_DIR" -maxdepth 1 -type f -name "*.mp4" | sort)
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
     echo "⚠️ No .mp4 files found in $MEDIA_DIR"
@@ -241,7 +287,7 @@ for i in "${!FILES[@]}"; do
 done
 
 echo "✅ All available streams launched."
-echo "👉 Example: ffplay rtsp://127.0.0.1:$RTSP_PORT/src1"
+echo "👉 Example: ffplay rtsp://127.0.0.1:$RTSP_PORT/src0"
 
 if [[ "$WEBRTC_COMPAT" == "1" ]]; then
     echo "✅ WebRTC compatibility mode enabled (H.264 baseline, no B-frames)."

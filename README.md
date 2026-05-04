@@ -10,7 +10,7 @@ The **Multi-Stream RTSP Launcher** is a Bash tool designed to quickly stand up a
 
 It automatically:  
 - Installs **FFmpeg** and **MediaMTX** if not already available.  
-- Starts a local RTSP server (`rtsp://<local-ip>:8554/`).  
+- Starts a local RTSP server (`rtsp://<local-ip>:8554/` by default).
 - Scans a media folder for `.mp4` files.  
 - Streams each file as a unique RTSP source (`/src0`, `/src1`, …).  
 - Keeps processes alive and logs FFmpeg output to `/tmp/ffmpeg_src<N>.log`.  
@@ -29,7 +29,7 @@ sima-cli install gh:sima-ai/tool-mediasources
 
 - FFmpeg → Installed automatically if missing (apt-get, yum, or brew).
 - MediaMTX → Downloaded and installed automatically from GitHub releases.
-- Bash ≥ 4.0
+- Bash 3.2+ (compatible with the default macOS `/bin/bash`)
 
 ### 3. Supported platforms:
 
@@ -67,6 +67,12 @@ To force passthrough mode (`-c:v copy`), disable compatibility mode:
 
 ```bash
 WEBRTC_COMPAT=0 ./mediasrc.sh ../videos-480p30
+```
+
+If the default RTSP port is already in use, choose another port:
+
+```bash
+RTSP_PORT=8555 ./mediasrc.sh ../videos-480p30
 ```
 
 ### 5. Preview the streams
