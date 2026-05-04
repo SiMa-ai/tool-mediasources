@@ -82,4 +82,4 @@ open preview.html
 ```
 
 `mediasrc.sh` automatically writes `preview-config.js` so `preview.html`
-uses the detected number of input videos.
+uses the detected number of input videos, and prints the preview page URL.

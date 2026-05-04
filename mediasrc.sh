@@ -26,6 +26,7 @@ MEDIAMTX_CONFIG_FILE="$SCRIPT_DIR/mediamtx.yml"
 MEDIAMTX_CONFIG_TO_USE="$MEDIAMTX_CONFIG_FILE"
 MEDIAMTX_RUNTIME_CONFIG=""
 PREVIEW_CONFIG_FILE="$SCRIPT_DIR/preview-config.js"
+PREVIEW_HTML_FILE="$SCRIPT_DIR/preview.html"
 
 if [[ ! -d "$MEDIA_DIR" ]]; then
     echo "❌ Error: '$MEDIA_DIR' is not a valid directory."
@@ -254,6 +255,8 @@ window.MEDIASRC_CONFIG = {
 };
 EOF
 echo "🧩 Wrote preview config: $PREVIEW_CONFIG_FILE (streams=${#FILES[@]})"
+echo "🌐 Preview page: file://$PREVIEW_HTML_FILE"
+echo "🌐 WebRTC streams: http://$LOCAL_IP:8889/src0/ ... src$((${#FILES[@]} - 1))/"
 
 for i in "${!FILES[@]}"; do
     INPUT="${FILES[$i]}"
