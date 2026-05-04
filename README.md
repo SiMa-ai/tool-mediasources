@@ -29,7 +29,7 @@ sima-cli install gh:sima-ai/tool-mediasources
 
 - FFmpeg → Installed automatically if missing (apt-get, yum, or brew).
 - MediaMTX → Downloaded and installed automatically from GitHub releases.
-- Bash ≥ 4.0
+- Bash 3.2+ (compatible with the default macOS `/bin/bash`)
 
 ### 3. Supported platforms:
 
@@ -69,6 +69,12 @@ To force passthrough mode (`-c:v copy`), disable compatibility mode:
 WEBRTC_COMPAT=0 ./mediasrc.sh ../videos-480p30
 ```
 
+If the default RTSP port is already in use, choose another port:
+
+```bash
+RTSP_PORT=9555 ./mediasrc.sh ../videos-480p30
+```
+
 ### 5. Preview the streams
 
 ```bash
@@ -76,7 +82,14 @@ open preview.html
 ```
 
 `mediasrc.sh` automatically writes `preview-config.js` so `preview.html`
-uses the detected number of input videos.
+uses the detected number of input videos, prints the preview page URL, and
+opens it in your browser when possible.
+
+To skip opening the browser automatically:
+
+```bash
+OPEN_PREVIEW=0 ./mediasrc.sh ../videos-480p30
+```
 
 
 ## UDP Preview Relay
