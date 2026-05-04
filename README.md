@@ -82,4 +82,11 @@ open preview.html
 ```
 
 `mediasrc.sh` automatically writes `preview-config.js` so `preview.html`
-uses the detected number of input videos, and prints the preview page URL.
+uses the detected number of input videos, prints the preview page URL, and
+opens it in your browser when possible.
+
+To skip opening the browser automatically:
+
+```bash
+OPEN_PREVIEW=0 ./mediasrc.sh ../videos-480p30
+```

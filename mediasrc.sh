@@ -18,6 +18,7 @@ fi
 MEDIA_DIR="$1"
 RTSP_PORT="${RTSP_PORT:-8554}"
 WEBRTC_COMPAT="${WEBRTC_COMPAT:-1}"
+OPEN_PREVIEW="${OPEN_PREVIEW:-1}"
 PIDS=()
 STARTED_MEDIAMTX=0
 MTX_PID=""
@@ -159,6 +160,45 @@ write_mediamtx_runtime_config() {
     MEDIAMTX_CONFIG_TO_USE="$MEDIAMTX_RUNTIME_CONFIG"
 }
 
+open_preview_page() {
+    local preview_url="file://$PREVIEW_HTML_FILE"
+    local windows_path=""
+
+    if [[ "$OPEN_PREVIEW" != "1" ]]; then
+        return 0
+    fi
+
+    case "$(uname -s)" in
+        Darwin*)
+            if command -v open >/dev/null 2>&1 && open "$PREVIEW_HTML_FILE" >/dev/null 2>&1; then
+                echo "🌐 Opened preview page in browser"
+                return 0
+            fi
+            ;;
+        Linux*)
+            if command -v xdg-open >/dev/null 2>&1 && xdg-open "$PREVIEW_HTML_FILE" >/dev/null 2>&1; then
+                echo "🌐 Opened preview page in browser"
+                return 0
+            fi
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            if command -v cmd.exe >/dev/null 2>&1; then
+                if command -v cygpath >/dev/null 2>&1; then
+                    windows_path=$(cygpath -w "$PREVIEW_HTML_FILE")
+                else
+                    windows_path="$PREVIEW_HTML_FILE"
+                fi
+                if cmd.exe /c start "" "$windows_path" >/dev/null 2>&1; then
+                    echo "🌐 Opened preview page in browser"
+                    return 0
+                fi
+            fi
+            ;;
+    esac
+
+    echo "⚠️ Could not open preview page automatically. Open: $preview_url"
+}
+
 kill_existing_publisher() {
     local src="$1"
     local pattern="ffmpeg .*:${RTSP_PORT}/src${src}([[:space:]]|$)"
@@ -290,6 +330,7 @@ for i in "${!FILES[@]}"; do
 done
 
 echo "✅ All available streams launched."
+open_preview_page
 echo "👉 Example: ffplay rtsp://127.0.0.1:$RTSP_PORT/src0"
 
 if [[ "$WEBRTC_COMPAT" == "1" ]]; then
