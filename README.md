@@ -51,22 +51,24 @@ mediasrc.bat ..\videos-480p30
 ```
 
 
-The folder should contain one or more .mp4 files.
+The folder should contain one or more supported media files (`.mp4`, `.m4v`,
+`.mov`, `.avi`, or `.mkv`).
 Each file will be exposed as its own RTSP stream.
 
-The launcher runs in foreground mode and uses a WebRTC-compatible H.264 profile
-(no B-frames) so streams can be viewed in `preview.html`.
+The launcher runs in foreground mode and detects the video codec for each file.
+It streams the encoded video from the file directly over RTSP without
+transcoding:
+
+- H.264 inputs are preserved as H.264 RTSP streams.
+- HEVC inputs are preserved as HEVC RTSP streams. Browser preview depends on
+  client HEVC support.
+- MJPEG inputs are preserved as MJPEG RTSP streams. MJPEG is useful for RTSP
+  camera simulation, but browser WebRTC preview may not display those sources.
 
 Press `Ctrl+C` to stop all launched stream publishers:
 
 ```bash
 ./mediasrc.sh ../videos-480p30
-```
-
-To force passthrough mode (`-c:v copy`), disable compatibility mode:
-
-```bash
-WEBRTC_COMPAT=0 ./mediasrc.sh ../videos-480p30
 ```
 
 If the default RTSP port is already in use, choose another port:
@@ -132,3 +134,37 @@ open preview-udp.html
 
 Dry-run mode writes the runtime config and SDP files without starting MediaMTX
 or FFmpeg relay processes.
+
+
+## MJPEG HTTP Streams
+
+`mjpegsrc.py` is a companion HTTP launcher for MJPEG AVI files. It is separate
+from `mediasrc.sh` because it does not publish RTSP streams through MediaMTX.
+Instead, it exposes `.avi` files as browser-readable multipart MJPEG HTTP
+streams on port `8002`.
+
+The input folder may contain mixed media files. `mjpegsrc.py` only uses `.avi`
+files whose first video stream is MJPEG; other files are ignored.
+
+### Start MJPEG HTTP streams
+
+```bash
+./mjpegsrc.py ../videos-multicodec
+```
+
+This exposes the detected AVI files as:
+
+- `http://127.0.0.1:8002/src0.mjpeg`
+- `http://127.0.0.1:8002/src1.mjpeg`
+- `http://127.0.0.1:8002/src2.mjpeg`
+
+The server also provides:
+
+- `http://127.0.0.1:8002/` - simple stream index
+- `http://127.0.0.1:8002/streams.json` - machine-readable stream list
+
+To use another port:
+
+```bash
+./mjpegsrc.py --port 8003 ../videos-multicodec
+```
