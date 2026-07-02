@@ -134,3 +134,37 @@ open preview-udp.html
 
 Dry-run mode writes the runtime config and SDP files without starting MediaMTX
 or FFmpeg relay processes.
+
+
+## MJPEG HTTP Streams
+
+`mjpegsrc.py` is a companion HTTP launcher for MJPEG AVI files. It is separate
+from `mediasrc.sh` because it does not publish RTSP streams through MediaMTX.
+Instead, it exposes `.avi` files as browser-readable multipart MJPEG HTTP
+streams on port `8002`.
+
+The input folder may contain mixed media files. `mjpegsrc.py` only uses `.avi`
+files whose first video stream is MJPEG; other files are ignored.
+
+### Start MJPEG HTTP streams
+
+```bash
+./mjpegsrc.py ../videos-multicodec
+```
+
+This exposes the detected AVI files as:
+
+- `http://127.0.0.1:8002/src0.mjpeg`
+- `http://127.0.0.1:8002/src1.mjpeg`
+- `http://127.0.0.1:8002/src2.mjpeg`
+
+The server also provides:
+
+- `http://127.0.0.1:8002/` - simple stream index
+- `http://127.0.0.1:8002/streams.json` - machine-readable stream list
+
+To use another port:
+
+```bash
+./mjpegsrc.py --port 8003 ../videos-multicodec
+```
