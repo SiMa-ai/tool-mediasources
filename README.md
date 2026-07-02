@@ -51,22 +51,24 @@ mediasrc.bat ..\videos-480p30
 ```
 
 
-The folder should contain one or more .mp4 files.
+The folder should contain one or more supported media files (`.mp4`, `.m4v`,
+`.mov`, `.avi`, or `.mkv`).
 Each file will be exposed as its own RTSP stream.
 
-The launcher runs in foreground mode and uses a WebRTC-compatible H.264 profile
-(no B-frames) so streams can be viewed in `preview.html`.
+The launcher runs in foreground mode and detects the video codec for each file.
+It streams the encoded video from the file directly over RTSP without
+transcoding:
+
+- H.264 inputs are preserved as H.264 RTSP streams.
+- HEVC inputs are preserved as HEVC RTSP streams. Browser preview depends on
+  client HEVC support.
+- MJPEG inputs are preserved as MJPEG RTSP streams. MJPEG is useful for RTSP
+  camera simulation, but browser WebRTC preview may not display those sources.
 
 Press `Ctrl+C` to stop all launched stream publishers:
 
 ```bash
 ./mediasrc.sh ../videos-480p30
-```
-
-To force passthrough mode (`-c:v copy`), disable compatibility mode:
-
-```bash
-WEBRTC_COMPAT=0 ./mediasrc.sh ../videos-480p30
 ```
 
 If the default RTSP port is already in use, choose another port:

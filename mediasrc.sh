@@ -17,7 +17,6 @@ fi
 
 MEDIA_DIR="$1"
 RTSP_PORT="${RTSP_PORT:-9554}"
-WEBRTC_COMPAT="${WEBRTC_COMPAT:-1}"
 OPEN_PREVIEW="${OPEN_PREVIEW:-1}"
 PIDS=()
 STARTED_MEDIAMTX=0
@@ -148,6 +147,45 @@ is_mediamtx_listening() {
     port_listener_info "$RTSP_PORT" | awk 'NR > 1 && $1 == "mediamtx" { found = 1 } END { exit found ? 0 : 1 }'
 }
 
+detect_video_codec() {
+    local input="$1"
+    ffprobe -v error \
+        -select_streams v:0 \
+        -show_entries stream=codec_name \
+        -of default=noprint_wrappers=1:nokey=1 \
+        "$input" 2>/dev/null | head -n 1
+}
+
+normalize_video_codec() {
+    local codec="$1"
+    case "$codec" in
+        h264|avc1)
+            echo "h264"
+            ;;
+        hevc|h265)
+            echo "hevc"
+            ;;
+        mjpeg)
+            echo "mjpeg"
+            ;;
+        *)
+            echo "unknown"
+            ;;
+    esac
+}
+
+build_ffmpeg_args() {
+    local input="$1"
+    local url="$2"
+
+    FFMPEG_ARGS=(
+        ffmpeg -nostdin -re -stream_loop -1 -i "$input"
+        -c:v copy -an
+        -rtsp_transport tcp
+        -f rtsp "$url"
+    )
+}
+
 write_mediamtx_runtime_config() {
     MEDIAMTX_CONFIG_TO_USE="$MEDIAMTX_CONFIG_FILE"
 
@@ -274,16 +312,24 @@ LOCAL_IP=$(get_local_ip)
 echo "✅ MediaMTX running on rtsp://$LOCAL_IP:$RTSP_PORT/"
 
 # --------------------------
-# Stream MP4 files in folder
+# Stream media files in folder
 # --------------------------
-echo "📁 Scanning MP4 files in $MEDIA_DIR..."
+echo "📁 Scanning media files in $MEDIA_DIR..."
 FILES=()
 while IFS= read -r file; do
     FILES+=("$file")
-done < <(find "$MEDIA_DIR" -maxdepth 1 -type f -name "*.mp4" | sort)
+done < <(
+    find "$MEDIA_DIR" -maxdepth 1 -type f \( \
+        -iname "*.mp4" -o \
+        -iname "*.m4v" -o \
+        -iname "*.mov" -o \
+        -iname "*.avi" -o \
+        -iname "*.mkv" \
+    \) | sort
+)
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
-    echo "⚠️ No .mp4 files found in $MEDIA_DIR"
+    echo "⚠️ No supported media files found in $MEDIA_DIR"
     exit 1
 fi
 
@@ -302,29 +348,18 @@ for i in "${!FILES[@]}"; do
     INPUT="${FILES[$i]}"
     SRC=$i
     URL="rtsp://$LOCAL_IP:$RTSP_PORT/src$SRC"
+    SOURCE_CODEC="$(detect_video_codec "$INPUT" || true)"
+    CODEC="$(normalize_video_codec "$SOURCE_CODEC")"
 
     kill_existing_publisher "$SRC"
-    echo "🎥 Streaming $INPUT -> $URL"
-    if [[ "$WEBRTC_COMPAT" == "1" ]]; then
-        FFMPEG_ARGS=(
-            ffmpeg -nostdin -re -stream_loop -1 -i "$INPUT"
-            -an
-            -c:v libx264
-            -preset ultrafast
-            -tune zerolatency
-            -pix_fmt yuv420p
-            -profile:v baseline
-            -x264-params "bframes=0:keyint=30:min-keyint=30:scenecut=0"
-            -f rtsp "$URL"
-        )
-    else
-        FFMPEG_ARGS=(
-            ffmpeg -nostdin -re -stream_loop -1 -i "$INPUT"
-            -c:v copy -an
-            -f rtsp "$URL"
-        )
+    echo "🎥 Streaming $INPUT -> $URL (codec=${SOURCE_CODEC:-unknown}, mode=${CODEC})"
+    if [[ "$CODEC" == "mjpeg" ]]; then
+        echo "   ℹ️ MJPEG is preserved for RTSP; browser WebRTC preview may not display this source."
+    elif [[ "$CODEC" == "hevc" ]]; then
+        echo "   ℹ️ HEVC is preserved for RTSP; browser preview depends on client HEVC support."
     fi
 
+    build_ffmpeg_args "$INPUT" "$URL"
     "${FFMPEG_ARGS[@]}" > "/tmp/ffmpeg_src${SRC}.log" 2>&1 &
     PIDS+=($!)
 done
@@ -333,9 +368,7 @@ echo "✅ All available streams launched."
 open_preview_page
 echo "👉 Example: ffplay rtsp://127.0.0.1:$RTSP_PORT/src0"
 
-if [[ "$WEBRTC_COMPAT" == "1" ]]; then
-    echo "✅ WebRTC compatibility mode enabled (H.264 baseline, no B-frames)."
-fi
+echo "✅ RTSP passthrough mode enabled. Video streams are copied from source files without transcoding."
 
 echo "🟢 Running in foreground. Press Ctrl+C to stop all launched streams."
 wait
